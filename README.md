@@ -1,10 +1,7 @@
-# Upstream Monitors
-
-GitHub Actions workflows that monitor upstream repositories for changes and create issues in my repos.
+# Fizzy API Monitor
+GitHub Actions workflows that monitors changes to Fizzy API documentation.
 
 ## Workflows
-
-### Fizzy API Monitor
 
 **File:** `.github/workflows/check-fizzy-api.yml`
 
