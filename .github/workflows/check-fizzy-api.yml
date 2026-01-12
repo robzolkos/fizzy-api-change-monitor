@@ -9,51 +9,75 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - name: Check for recent API.md changes
+      - name: Checkout history branch
+        uses: actions/checkout@v4
+        with:
+          ref: history
+          path: history
+
+      - name: Check for API.md changes since last run
         id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          # Fetch the Atom feed and extract commits from last 24 hours
-          curl -s "https://github.com/basecamp/fizzy/commits/main/docs/API.md.atom" > feed.xml
+          # Read the last known SHA
+          LAST_SHA=""
+          if [ -f history/fizzy-api-last-sha.txt ]; then
+            LAST_SHA=$(cat history/fizzy-api-last-sha.txt)
+            echo "Last known SHA: $LAST_SHA"
+          else
+            echo "No previous SHA found, this is the first run"
+          fi
 
-          # Get current time minus 24 hours in ISO format
-          CUTOFF=$(date -u -d "24 hours ago" +%Y-%m-%dT%H:%M:%SZ)
+          # Get the current latest commit SHA for docs/API.md
+          CURRENT_SHA=$(gh api repos/basecamp/fizzy/commits \
+            -q '.[0].sha' \
+            -f path=docs/API.md \
+            -f per_page=1)
+          echo "Current SHA: $CURRENT_SHA"
 
-          # Parse feed and extract recent commits
-          python3 << 'EOF' > commits.json
-          import xml.etree.ElementTree as ET
-          from datetime import datetime, timedelta, timezone
+          if [ "$LAST_SHA" = "$CURRENT_SHA" ]; then
+            echo "No changes detected"
+            echo "changed=false" >> $GITHUB_OUTPUT
+          else
+            echo "Changes detected!"
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "current_sha=$CURRENT_SHA" >> $GITHUB_OUTPUT
+
+            # Fetch commits between last SHA and current
+            if [ -n "$LAST_SHA" ]; then
+              # Get all commits since the last known SHA
+              gh api repos/basecamp/fizzy/commits \
+                -q '[.[] | {sha: .sha, message: .commit.message, author: .commit.author.name, url: .html_url}]' \
+                -f path=docs/API.md \
+                -f per_page=100 > all_commits.json
+
+              # Filter to only commits after our last known SHA
+              python3 << EOF > commits.json
           import json
 
-          cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+          with open('all_commits.json') as f:
+              commits = json.load(f)
 
-          tree = ET.parse('feed.xml')
-          root = tree.getroot()
-          ns = {'atom': 'http://www.w3.org/2005/Atom'}
+          last_sha = "$LAST_SHA"
+          new_commits = []
+          for commit in commits:
+              if commit['sha'] == last_sha:
+                  break
+              new_commits.append(commit)
 
-          commits = []
-          for entry in root.findall('atom:entry', ns):
-              updated = entry.find('atom:updated', ns).text
-              updated_dt = datetime.fromisoformat(updated.replace('Z', '+00:00'))
-
-              if updated_dt > cutoff:
-                  commits.append({
-                      'title': entry.find('atom:title', ns).text,
-                      'link': entry.find('atom:link', ns).get('href'),
-                      'updated': updated,
-                      'author': entry.find('atom:author/atom:name', ns).text
-                  })
-
-          print(json.dumps(commits))
+          print(json.dumps(new_commits))
           EOF
+            else
+              # First run - just report the latest commit
+              gh api repos/basecamp/fizzy/commits \
+                -q '[.[] | {sha: .sha, message: .commit.message, author: .commit.author.name, url: .html_url}]' \
+                -f path=docs/API.md \
+                -f per_page=1 > commits.json
+            fi
 
-          COMMIT_COUNT=$(python3 -c "import json; print(len(json.load(open('commits.json'))))")
-
-          if [ "$COMMIT_COUNT" -gt 0 ]; then
-            echo "changed=true" >> $GITHUB_OUTPUT
-            echo "Found $COMMIT_COUNT commits in the last 24 hours"
-          else
-            echo "changed=false" >> $GITHUB_OUTPUT
-            echo "No recent changes"
+            echo "New commits:"
+            cat commits.json
           fi
 
       - name: Create or update issue in fizzy-cli
@@ -71,10 +95,8 @@ jobs:
             const title = '🔔 Upstream API.md has changed';
 
             const commitList = commits.map(c => {
-              const sha = c.link.split('/').pop().slice(0, 7);
-              const date = new Date(c.updated);
-              const relative = Math.round((Date.now() - date) / (1000 * 60 * 60));
-              return `- [\`${sha}\`](${c.link}) ${c.title} (${c.author}, ${relative}h ago)`;
+              const sha = c.sha.slice(0, 7);
+              return `- [\`${sha}\`](${c.url}) ${c.message.split('\n')[0]} (${c.author})`;
             }).join('\n');
 
             const body = [
@@ -82,7 +104,7 @@ jobs:
               '',
               'The upstream `docs/API.md` file has changed in [basecamp/fizzy](https://github.com/basecamp/fizzy).',
               '',
-              '## Recent commits (last 24 hours)',
+              '## New commits since last check',
               '',
               commitList,
               '',
@@ -119,3 +141,14 @@ jobs:
               });
               console.log('Created new issue');
             }
+
+      - name: Update history branch with new SHA
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          cd history
+          echo "${{ steps.check.outputs.current_sha }}" > fizzy-api-last-sha.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add fizzy-api-last-sha.txt
+          git commit -m "Update fizzy API.md SHA to ${{ steps.check.outputs.current_sha }}"
+          git push
