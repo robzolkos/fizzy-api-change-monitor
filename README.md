@@ -1,7 +1,7 @@
 # Fizzy API Monitor
-GitHub Actions workflows that monitors changes to Fizzy API documentation.
+GitHub Actions workflow that monitors changes to Fizzy API documentation.
 
-## Workflows
+## Workflow
 
 **File:** `.github/workflows/check-fizzy-api.yml`
 
@@ -9,11 +9,17 @@ Monitors `docs/API.md` in [basecamp/fizzy](https://github.com/basecamp/fizzy) fo
 
 **Schedule:** Daily at 9am UTC
 
-**Behavior:**
-- Fetches the Atom feed for `docs/API.md` commits
-- If any commits occurred in the last 24 hours, creates/updates an issue in [robzolkos/fizzy-cli](https://github.com/robzolkos/fizzy-cli)
-- Issue lists all recent commits with links, authors, and timestamps
-- If an open issue already exists (label: `upstream-api-change`), updates it
+**How it works:**
+- Uses GitHub API to fetch commits that touched `docs/API.md` specifically (not the whole repo)
+- Stores the last known commit SHA in the `history` branch
+- Compares against the current latest SHA for that file
+- If different, fetches all new commits and creates/updates an issue in [robzolkos/fizzy-cli](https://github.com/robzolkos/fizzy-cli)
+- Updates the stored SHA after successful detection
+
+This approach catches changes regardless of when commits were authored vs merged.
+
+**Issue behavior:**
+- If an open issue exists (label: `upstream-api-change`), updates it
 - Closing the issue resets the cycle - next detected change creates a fresh issue
 
 **Setup:**
